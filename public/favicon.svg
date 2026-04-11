@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Drop shadow -->
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="135%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#6EE7B7" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Cloud body -->
+  <g filter="url(#shadow)">
+    <!-- Main cloud shape -->
+    <ellipse cx="50" cy="62" rx="34" ry="20" fill="#A7F3D0"/>
+    <circle cx="35" cy="57" r="16" fill="#A7F3D0"/>
+    <circle cx="55" cy="50" r="20" fill="#A7F3D0"/>
+    <circle cx="70" cy="57" r="14" fill="#A7F3D0"/>
+    <!-- Rectangle base to fill bottom gap -->
+    <rect x="16" y="62" width="68" height="18" rx="10" fill="#A7F3D0"/>
+  </g>
+
+  <!-- Tiny tick / checkmark -->
+  <polyline
+    points="38,63 46,71 62,53"
+    fill="none"
+    stroke="#065F46"
+    stroke-width="5.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
