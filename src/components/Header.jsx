@@ -1,7 +1,6 @@
 import { Calendar, ListTodo } from 'lucide-react';
-import ZenGreeting from './ZenGreeting';
 
-export default function Header({ tasks }) {
+export default function Header() {
   const today = new Date();
   const options = { weekday: 'long', month: 'long', day: 'numeric' };
   const dateString = today.toLocaleDateString('en-US', options);
@@ -12,9 +11,9 @@ export default function Header({ tasks }) {
         <div className="bg-theme-glow p-4 rounded-full border border-theme-glow">
           <ListTodo size={32} className="text-theme" />
         </div>
-        <div className="flex flex-col">
-          <h1 className="text-3xl font-extrabold tracking-tight text-title mb-0.5">MyDay</h1>
-          <ZenGreeting tasks={tasks} />
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-title mb-1">MyDay</h1>
+          <p className="text-sub text-sm font-bold uppercase tracking-widest">Cozy Task List ✨</p>
         </div>
       </div>
       
