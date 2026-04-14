@@ -302,7 +302,7 @@ The **Theme Picker** sits at the top and lets you switch between multiple curate
 GitHub: [@YogapriyaN2007](https://github.com/YogapriyaN2007)
 
 **Darshan V**  
-GitHub: [@DarshanV](https://github.com/DarshanV)  <!-- Replace with actual GitHub if known -->
+GitHub: [@DarshanV](https://github.com/Darshanv2006)  <!-- Replace with actual GitHub if known -->
 
 ---
 
