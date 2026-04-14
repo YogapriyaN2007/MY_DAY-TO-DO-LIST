@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { supabase } from './supabaseClient';
 import Header from './components/Header';
 import QuickInput from './components/QuickInput';
 import FilterRow from './components/FilterRow';
@@ -9,36 +10,36 @@ import CalendarWidget from './components/CalendarWidget';
 import NotificationToast from './components/NotificationToast';
 import SplashScreen from './components/SplashScreen';
 import MemoryLane from './components/MemoryLane';
+import StatsBento from './components/StatsBento';
+import ZenGreeting from './components/ZenGreeting';
+import SortableTask from './components/SortableTask';
+import { 
+  DndContext, 
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [showCelebration, setShowCelebration] = useState(false);
 
-  const [tasks, setTasks] = useState(() => {
-    const saved = localStorage.getItem('lift-tasks');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        return [];
-      }
-    }
-    return [
-      { id: '1', text: 'Define the God-Level architecture', category: 'Work', completed: true, createdAt: new Date().toISOString() },
-      { id: '2', text: 'Build Bento Box layout', category: 'Work', completed: false, createdAt: new Date().toISOString() },
-    ];
-  });
+  const [tasks, setTasks] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [wins, setWins] = useState([]);
   const [filter, setFilter]               = useState('All');
   const [search, setSearch]               = useState('');
   const [priorityFilter, setPriorityFilter] = useState('Any');
   const [activeReminders, setActiveReminders] = useState([]);
   
-  // Schedule state
-  const [events, setEvents] = useState(() => {
-    const saved = localStorage.getItem('myday-events');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
   const [selectedDate, setSelectedDate] = useState(() => {
     return new Date().toISOString().split('T')[0];
   });
@@ -53,25 +54,46 @@ export default function App() {
     return CUTE_THEMES[0];
   });
 
-  const [wins, setWins] = useState(() => {
-    const saved = localStorage.getItem('myday-wins');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
-    }
-    return [];
-  });
 
-  useEffect(() => {
-    localStorage.setItem('lift-tasks', JSON.stringify(tasks));
-  }, [tasks]);
 
+  // Load initial data from Supabase
   useEffect(() => {
-    localStorage.setItem('myday-wins', JSON.stringify(wins));
-  }, [wins]);
+    const fetchData = async () => {
+      // Fetch all tasks
+      const { data: tasksData } = await supabase
+        .from('tasks')
+        .select('*')
+        .order('completed', { ascending: true })
+        .order('order_index', { ascending: true });
+      
+      if (tasksData) {
+        const mappedTasks = tasksData.map(t => ({
+          ...t,
+          createdAt: t.created_at,
+          dueDate: t.due_date,
+          completedAt: t.completed_at,
+          isRecurring: t.is_recurring,
+          frequency: t.frequency
+        }));
+        setTasks(mappedTasks.filter(t => !t.completed));
+        setWins(mappedTasks.filter(t => t.completed));
+      }
 
-  useEffect(() => {
-    localStorage.setItem('myday-events', JSON.stringify(events));
-  }, [events]);
+      // Fetch all events
+      const { data: eventsData } = await supabase
+        .from('events')
+        .select('*');
+      
+      if (eventsData) {
+        setEvents(eventsData.map(e => ({
+          ...e,
+          reminderOffset: e.reminder_offset
+        })));
+      }
+    };
+
+    fetchData();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('lift-theme-v2', JSON.stringify(currentTheme));
@@ -95,26 +117,125 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
-  const addTask = (newTask) => {
-    setTasks([newTask, ...tasks]);
+  const addTask = async (newTask) => {
+    // New task at Top (index 0)
+    const newWithIndex = { ...newTask, order_index: 0 };
+    const updatedTasks = [newWithIndex, ...tasks].map((t, idx) => ({ ...t, order_index: idx }));
+    
+    setTasks(updatedTasks);
+    
+    // Save new task
+    const { error } = await supabase
+      .from('tasks')
+      .insert({
+        id: newTask.id,
+        text: newTask.text,
+        category: newTask.category,
+        priority: newTask.priority,
+        completed: newTask.completed,
+        created_at: newTask.createdAt,
+        due_date: newTask.dueDate,
+        is_recurring: newTask.isRecurring,
+        frequency: newTask.frequency,
+        subtasks: newTask.subtasks || [],
+        order_index: 0
+      });
+
+    // Sync other tasks' indices in background
+    if (updatedTasks.length > 1) {
+       const updates = updatedTasks.slice(1).map(t => ({ 
+         id: t.id, 
+         order_index: t.order_index, 
+         completed: false 
+       }));
+       supabase.from('tasks').upsert(updates).then(({ error }) => {
+         if (error) console.error('Tasks re-index error:', error);
+       });
+    }
+    
+    if (error) console.error('Error adding task:', error);
   };
 
-  const toggleTask = (id) => {
+  const calculateNextOccurrence = (currentDate, frequency) => {
+    if (!currentDate) return null;
+    const date = new Date(currentDate + 'T00:00:00');
+    if (frequency === 'daily') date.setDate(date.getDate() + 1);
+    else if (frequency === 'weekly') date.setDate(date.getDate() + 7);
+    else if (frequency === 'monthly') date.setMonth(date.getMonth() + 1);
+    return date.toISOString().split('T')[0];
+  };
+
+  const toggleTask = async (id) => {
     const task = tasks.find(t => t.id === id);
     if (!task) return;
+
     if (!task.completed) {
+      // Completing a task
+      const completedAt = new Date().toISOString();
+      const updatedTask = { ...task, completed: true, completedAt };
+
+      if (task.isRecurring) {
+        // Create a separate Win record for recurring tasks to keep history
+        const winId = crypto.randomUUID();
+        const winRecord = { ...task, id: winId, completed: true, completedAt, isRecurring: false };
+        setWins(prev => [winRecord, ...prev]);
+        
+        await supabase.from('tasks').insert({
+          id: winId,
+          text: task.text,
+          category: task.category,
+          priority: task.priority,
+          completed: true,
+          completed_at: completedAt,
+          is_recurring: false
+        });
+
+        // Update original task to next occurrence
+        const nextDate = calculateNextOccurrence(task.dueDate || new Date().toISOString().split('T')[0], task.frequency);
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, dueDate: nextDate } : t));
+        await supabase.from('tasks').update({ due_date: nextDate }).eq('id', id);
+        
+        return; // Skip the default behavior for recurring
+      }
+
       setTasks(prev => prev.filter(t => t.id !== id));
-      setWins(prev => [...prev, { ...task, completed: true, completedAt: new Date().toISOString() }]);
+      setWins(prev => [updatedTask, ...prev]);
+
+      await supabase
+        .from('tasks')
+        .update({ completed: true, completed_at: completedAt })
+        .eq('id', id);
     } else {
-      setTasks(tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
+      // Moving back from wins (if needed, though UI doesn't explicitly support yet)
+      const updatedTask = { ...task, completed: false, completedAt: null };
+      setWins(prev => prev.filter(t => t.id !== id));
+      setTasks(prev => [updatedTask, ...prev]);
+
+      await supabase
+        .from('tasks')
+        .update({ completed: false, completed_at: null })
+        .eq('id', id);
     }
   };
 
-  const editTask = (id, updates) => {
+  const editTask = async (id, updates) => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+    
+    await supabase
+      .from('tasks')
+      .update(updates)
+      .eq('id', id);
   };
 
-  const clearWins = () => setWins([]);
+  const clearWins = async () => {
+    const winIds = wins.map(w => w.id);
+    setWins([]);
+    
+    await supabase
+      .from('tasks')
+      .delete()
+      .in('id', winIds);
+  };
 
   useEffect(() => {
     // Request notification permission on load
@@ -177,16 +298,26 @@ export default function App() {
     return () => clearInterval(interval);
   }, [events]);
 
-  const deleteTask = (id) => {
+  const deleteTask = async (id) => {
     setTasks(tasks.filter(task => task.id !== id));
+    await supabase.from('tasks').delete().eq('id', id);
   };
 
-  const addEvent = (newEvent) => {
+  const addEvent = async (newEvent) => {
     setEvents([...events, newEvent]);
+    await supabase.from('events').insert({
+      id: newEvent.id,
+      text: newEvent.text,
+      date: newEvent.date,
+      time: newEvent.time,
+      notified: newEvent.notified,
+      reminder_offset: newEvent.reminderOffset
+    });
   };
 
-  const deleteEvent = (id) => {
+  const deleteEvent = async (id) => {
     setEvents(events.filter(e => e.id !== id));
+    await supabase.from('events').delete().eq('id', id);
   };
 
   const handleTaskComplete = () => {
@@ -201,6 +332,36 @@ export default function App() {
     if (search.trim() && !task.text.toLowerCase().includes(search.trim().toLowerCase())) return false;
     return true;
   });
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const handleDragEnd = async (event) => {
+    const { active, over } = event;
+    if (active && over && active.id !== over.id) {
+       setTasks((items) => {
+         const oldIndex = items.findIndex((t) => t.id === active.id);
+         const newIndex = items.findIndex((t) => t.id === over.id);
+         const newOrder = arrayMove(items, oldIndex, newIndex);
+         
+         // Update Supabase with new indices
+         const updates = newOrder.map((task, index) => ({
+           id: task.id,
+           order_index: index,
+           completed: false // Ensure we're only indexing active tasks correctly
+         }));
+
+         // Perform batch update
+         supabase.from('tasks').upsert(updates).then(({ error }) => {
+           if (error) console.error('Persistence Error:', error);
+         });
+
+         return newOrder;
+       });
+    }
+  };
 
   return (
     <>
@@ -227,7 +388,7 @@ export default function App() {
               </div>
               
               <div className="lg:col-span-12">
-                <Header />
+                <Header tasks={tasks} />
               </div>
               
               {/* Left Column: Tasks & Focus */}
@@ -247,6 +408,11 @@ export default function App() {
                         />
                     </div>
                  </div>
+                 
+                 {/* Stats Bento inside Left Column */}
+                 <div className="mt-4 h-[280px]">
+                    <StatsBento tasks={tasks} wins={wins} />
+                 </div>
               </div>
 
               {/* Middle Column: Your List */}
@@ -262,25 +428,51 @@ export default function App() {
                   </h2>
                   
                   <div className="flex flex-col gap-3 flex-1 overflow-y-auto pr-2 z-10 nice-scrollbar">
-                    {filteredTasks.length === 0 ? (
-                      <div className="flex-1 flex flex-col items-center justify-center text-sub font-medium py-12 gap-4">
-                        <div className="w-16 h-16 rounded-2xl bg-card flex items-center justify-center border border-card shadow-sm">
-                           <span className="text-2xl">✨</span>
-                        </div>
-                        <p>{filter === 'All' ? "No tasks yet. Let's get things done!" : `No ${filter.toLowerCase()} tasks.`}</p>
-                      </div>
-                    ) : (
-                      filteredTasks.map(task => (
-                        <TaskCard 
-                          key={task.id} 
-                          task={task} 
-                          onToggle={toggleTask} 
-                          onDelete={deleteTask}
-                          onEdit={editTask}
-                          onComplete={handleTaskComplete}
-                        />
-                      ))
-                    )}
+                    <DndContext 
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={handleDragEnd}
+                    >
+                      <SortableContext 
+                        items={filteredTasks.map(t => t.id)}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        <AnimatePresence mode="popLayout">
+                          {filteredTasks.length === 0 ? (
+                            <motion.div 
+                              key="empty"
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              className="flex-1 flex flex-col items-center justify-center text-sub font-medium py-12 gap-4"
+                            >
+                              <div className="w-16 h-16 rounded-2xl bg-card flex items-center justify-center border border-card shadow-sm">
+                                <span className="text-2xl">✨</span>
+                              </div>
+                              <p>{filter === 'All' ? "No tasks yet. Let's get things done!" : `No ${filter.toLowerCase()} tasks.`}</p>
+                            </motion.div>
+                          ) : (
+                            filteredTasks.map(task => (
+                              <motion.div
+                                key={task.id}
+                                layout
+                                initial={{ opacity: 0, x: -10 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                exit={{ opacity: 0, scale: 0.95 }}
+                              >
+                                <SortableTask 
+                                  key={task.id}
+                                  task={task} 
+                                  onToggle={toggleTask} 
+                                  onDelete={deleteTask}
+                                  onEdit={editTask}
+                                  onComplete={handleTaskComplete}
+                                />
+                              </motion.div>
+                            ))
+                          )}
+                        </AnimatePresence>
+                      </SortableContext>
+                    </DndContext>
                   </div>
                 </div>
               </div>
